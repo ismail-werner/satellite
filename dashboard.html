@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ground Station</title>
+<style>
+  body{margin:0;background:#0b0e17;color:#dde;font:14px system-ui,sans-serif}
+  header{display:flex;gap:16px;align-items:center;padding:12px 16px}
+  h1{margin:0;font-size:18px;letter-spacing:2px}
+  #mode{padding:3px 10px;border-radius:12px;font-weight:600}
+  .NOMINAL{background:#1f7a3d}.SAFE{background:#b3261e}
+  main{display:grid;gap:12px;padding:0 16px 16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+  section{background:#141a2b;border-radius:8px;padding:12px}
+  h2{margin:0 0 8px;font-size:13px;color:#7fb4ff;text-transform:uppercase}
+  canvas{width:100%;height:160px;display:block}
+  button{background:#26304d;color:#dde;border:0;border-radius:6px;padding:8px 12px;margin:2px;cursor:pointer}
+  button:hover{background:#35426b}
+  pre{margin:0;font-size:12px;white-space:pre-wrap}
+  .bad{color:#ff6b6b}
+</style>
+</head>
+<body>
+<header><h1>GROUND STATION</h1><span id="mode"></span><span id="link"></span><span id="meta"></span></header>
+<main>
+  <section><h2>Battery %</h2><canvas id="c_battery"></canvas></section>
+  <section><h2>Temperature °C</h2><canvas id="c_temp"></canvas></section>
+  <section><h2>Solar vs load (W)</h2><canvas id="c_power"></canvas></section>
+  <section><h2>Ground track</h2><canvas id="c_map"></canvas></section>
+  <section><h2>Commands</h2>
+    <button onclick="cmd('PING')">PING</button>
+    <button onclick="cmd('SET_MODE','SAFE')">SAFE mode</button>
+    <button onclick="cmd('SET_MODE','NOMINAL')">NOMINAL mode</button>
+    <button onclick="cmd('PAYLOAD','ON')">Payload ON</button>
+    <button onclick="cmd('PAYLOAD','OFF')">Payload OFF</button>
+    <button onclick="cmd('CLEAR_FAULTS')">Clear faults</button>
+    <pre id="acks"></pre></section>
+  <section><h2>Onboard event log</h2><pre id="log"></pre><p class="bad" id="faults"></p></section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const cmd = (c, arg) => fetch('/cmd', {method: 'POST', body: JSON.stringify({cmd: c, arg})});
+
+function chart(id, series, lo, hi, colors) {
+  const c = $(id), r = devicePixelRatio || 1;
+  c.width = c.clientWidth * r; c.height = c.clientHeight * r;
+  const g = c.getContext('2d'), W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  g.strokeStyle = '#223'; g.fillStyle = '#889'; g.font = `${11 * r}px sans-serif`;
+  [lo, (lo + hi) / 2, hi].forEach(v => { const y = H - (v - lo) / (hi - lo) * H; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); g.fillText(v, 2, y - 2); });
+  series.forEach((s, i) => {
+    g.strokeStyle = colors[i]; g.beginPath();
+    s.forEach((v, j) => { const x = j / Math.max(s.length - 1, 1) * W, y = H - (v - lo) / (hi - lo) * H; j ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.stroke();
+  });
+}
+
+function map(h) {
+  const c = $('c_map'), r = devicePixelRatio || 1;
+  c.width = c.clientWidth * r; c.height = c.clientHeight * r;
+  const g = c.getContext('2d'), W = c.width, H = c.height;
+  g.strokeStyle = '#223'; g.strokeRect(0, 0, W, H);
+  g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
+  const xy = p => [(p.lon + 180) / 360 * W, (90 - p.lat) / 180 * H];
+  g.fillStyle = '#7fb4ff';
+  h.forEach(p => { const [x, y] = xy(p); g.fillRect(x, y, 2 * r, 2 * r); });
+  const [x, y] = xy(h[h.length - 1]);
+  g.fillStyle = '#f33'; g.beginPath(); g.arc(x, y, 5 * r, 0, 7); g.fill();
+}
+
+async function poll() {
+  try {
+    const d = await (await fetch('/api')).json(), h = d.history, last = h[h.length - 1];
+    $('link').textContent = d.linked ? '● link up' : '○ link down';
+    if (last) {
+      $('mode').textContent = last.mode; $('mode').className = last.mode;
+      $('meta').textContent = `T+${(last.t / 60).toFixed(0)} min · ${last.eclipse ? 'ECLIPSE' : 'SUNLIT'} · payload ${last.payload ? 'ON' : 'OFF'}`;
+      chart('c_battery', [h.map(p => p.battery)], 0, 100, ['#4cd964']);
+      chart('c_temp', [h.map(p => p.temp)], -40, 60, ['#ff9f43']);
+      chart('c_power', [h.map(p => p.solar_w), h.map(p => p.load_w)], 0, 50, ['#ffd93d', '#ff6b6b']);
+      map(h);
+      $('log').textContent = last.log.join('\n');
+      $('faults').textContent = last.faults.length ? 'FAULTS: ' + last.faults.join(', ') : '';
+    }
+    $('acks').textContent = d.acks.slice(-5).map(a => `> ${a.cmd || ''} ${a.arg || ''}: ${a.reply}`).join('\n');
+  } catch (e) { $('link').textContent = '○ ground server down'; }
+}
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>

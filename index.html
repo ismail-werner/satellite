@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mission Control</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  body{margin:0;background:#0b0e17;color:#dde;font:14px system-ui,sans-serif}
+  h1{margin:0;padding:12px 16px;font-size:18px;letter-spacing:2px}
+  main{display:grid;gap:12px;padding:0 16px 16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+  section{background:#141a2b;border-radius:8px;padding:12px}
+  h2{margin:0 0 8px;font-size:13px;color:#7fb4ff;text-transform:uppercase}
+  #map{height:300px;border-radius:6px}
+  img{max-width:100%;border-radius:6px}
+  table{width:100%;border-collapse:collapse}
+  td{padding:3px 4px;border-bottom:1px solid #223}
+  .haz{color:#ff6b6b}
+</style>
+</head>
+<body>
+<h1>MISSION CONTROL</h1>
+<main>
+  <section><h2>ISS live position</h2><div id="map"></div><p id="iss"></p></section>
+  <section><h2>NASA picture of the day</h2><div id="apod">loading…</div></section>
+  <section><h2>Asteroids passing today</h2><table id="neo"></table></section>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const KEY = 'DEMO_KEY'; // ponytail: DEMO_KEY is rate limited (30/hr), get a free key at api.nasa.gov
+const $ = id => document.getElementById(id);
+const get = u => fetch(u).then(r => r.json());
+
+// ISS
+const map = L.map('map').setView([0, 0], 2);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '© OpenStreetMap'}).addTo(map);
+const marker = L.circleMarker([0, 0], {color: '#f33', radius: 7}).addTo(map);
+const trail = L.polyline([], {color: '#7fb4ff'}).addTo(map);
+async function iss() {
+  const d = await get('https://api.wheretheiss.at/v1/satellites/25544');
+  const p = [d.latitude, d.longitude];
+  marker.setLatLng(p); trail.addLatLng(p); map.panTo(p);
+  $('iss').textContent = `${p[0].toFixed(2)}°, ${p[1].toFixed(2)}° · ${d.altitude.toFixed(0)} km · ${(d.velocity).toFixed(0)} km/h`;
+}
+iss(); setInterval(iss, 5000);
+
+// APOD
+get(`https://api.nasa.gov/planetary/apod?api_key=${KEY}`).then(d => {
+  $('apod').innerHTML = `<b>${d.title}</b>` +
+    (d.media_type === 'image' ? `<img src="${d.url}">` : `<p><a href="${d.url}" target="_blank">watch video</a></p>`) +
+    `<p>${d.explanation}</p>`;
+}).catch(() => $('apod').textContent = 'APOD unavailable (rate limit?)');
+
+// Near-earth objects
+const today = new Date().toISOString().slice(0, 10);
+get(`https://api.nasa.gov/neo/rest/v1/feed?start_date=${today}&end_date=${today}&api_key=${KEY}`).then(d => {
+  const rows = Object.values(d.near_earth_objects)[0].map(a => {
+    const c = a.close_approach_data[0];
+    return `<tr class="${a.is_potentially_hazardous_asteroid ? 'haz' : ''}"><td>${a.name}</td>` +
+      `<td>${a.estimated_diameter.meters.estimated_diameter_max.toFixed(0)} m</td>` +
+      `<td>${(+c.miss_distance.lunar).toFixed(1)} LD</td><td>${(+c.relative_velocity.kilometers_per_second).toFixed(1)} km/s</td></tr>`;
+  });
+  $('neo').innerHTML = '<tr><td>Name</td><td>Size</td><td>Miss dist.</td><td>Speed</td></tr>' + rows.join('');
+}).catch(() => $('neo').textContent = 'NeoWs unavailable (rate limit?)');
+</script>
+</body>
+</html>

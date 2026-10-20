@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Satellite Tracker</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#05070d;color:#dde;font:13px system-ui,sans-serif;overflow:hidden}
+  #globe{position:fixed;inset:0}
+  .panel{position:fixed;background:rgba(15,20,35,.88);border-radius:8px;padding:10px;backdrop-filter:blur(6px)}
+  #side{left:12px;top:12px;bottom:70px;width:250px;display:flex;flex-direction:column;gap:6px}
+  #side select,#side input{background:#1b2440;color:#dde;border:0;border-radius:6px;padding:7px}
+  #list{overflow:auto;flex:1}
+  #list div{padding:4px 6px;cursor:pointer;border-radius:4px}
+  #list div:hover{background:#26304d}
+  #list .on{background:#35426b}
+  #info{right:12px;top:12px;min-width:210px}
+  #info b{color:#7fb4ff}
+  #bar{left:12px;right:12px;bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  button{background:#26304d;color:#dde;border:0;border-radius:6px;padding:6px 10px;cursor:pointer}
+  button:hover,button.on{background:#35426b}
+  #sim{right:12px;bottom:70px;width:230px;display:none}
+  #sim h3{margin:0 0 6px;font-size:12px;color:#ffd93d;text-transform:uppercase}
+  #sim i{font-style:normal}
+  .NOMINAL{color:#4cd964}.SAFE{color:#ff6b6b}
+  #msg{left:50%;top:14px;transform:translateX(-50%)}
+  @media(max-width:700px){#side{width:170px}#sim{display:none!important}}
+</style>
+</head>
+<body>
+<canvas id="globe"></canvas>
+
+<div id="side" class="panel">
+  <select id="group">
+    <option value="stations">Space stations</option>
+    <option value="visual">Brightest (visual)</option>
+    <option value="weather">Weather</option>
+    <option value="gps-ops">GPS</option>
+    <option value="science">Science</option>
+  </select>
+  <input id="q" placeholder="search…">
+  <div id="list"></div>
+</div>
+
+<div id="info" class="panel">Click a satellite</div>
+
+<div id="sim" class="panel">
+  <h3>Simulated satellite</h3>
+  <div id="simtm"></div>
+  <p>
+    <button onclick="cmd('SET_MODE','SAFE')">SAFE</button>
+    <button onclick="cmd('SET_MODE','NOMINAL')">NOMINAL</button>
+    <button onclick="cmd('PAYLOAD','OFF')">Payload off</button>
+    <button onclick="cmd('PAYLOAD','ON')">Payload on</button>
+  </p>
+</div>
+
+<div id="bar" class="panel">
+  <span id="clock"></span>
+  <span>
+    <button data-s="1" class="on">1×</button><button data-s="60">60×</button>
+    <button data-s="600">600×</button><button data-s="3600">3600×</button>
+    <button id="now">Now</button>
+  </span>
+  <label><input type="checkbox" id="trail" checked> orbit path</label>
+</div>
+<div id="msg" class="panel" style="display:none"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@4.1.4/dist/satellite.min.js"></script>
+<script>
+const R = 6371, $ = id => document.getElementById(id);
+const xyz = (lat, lon, h) => { const r = 1 + h / R, c = Math.cos(lat); return [r * c * Math.cos(lon), r * Math.sin(lat), -r * c * Math.sin(lon)]; };
+
+// --- scene ---
+const renderer = new THREE.WebGLRenderer({canvas: $('globe'), antialias: true});
+const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(0, 1.5, 3.2);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.minDistance = 1.3; controls.maxDistance = 10; controls.enablePan = false;
+const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 64), new THREE.MeshBasicMaterial({color: 0x1a3a6b}));
+new THREE.TextureLoader().load('https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg',
+  t => { earth.material = new THREE.MeshBasicMaterial({map: t}); });
+scene.add(earth);
+const ptsGeo = new THREE.BufferGeometry();
+const pts = new THREE.Points(ptsGeo, new THREE.PointsMaterial({color: 0xffffff, size: 4, sizeAttenuation: false}));
+scene.add(pts);
+const sel = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), new THREE.MeshBasicMaterial({color: 0xff3333}));
+sel.visible = false; scene.add(sel);
+const simMark = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), new THREE.MeshBasicMaterial({color: 0xffd93d}));
+simMark.visible = false; scene.add(simMark);
+let trailLine = null;
+function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+// --- data ---
+let sats = [], selected = -1, speed = 1, simMs = Date.now(), last = performance.now();
+const msg = t => { $('msg').style.display = t ? '' : 'none'; $('msg').textContent = t; };
+
+async function load(group) {
+  msg('loading ' + group + '…');
+  try {
+    const txt = await (await fetch(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=tle`)).text();
+    const L = txt.trim().split(/\r?\n/);
+    sats = [];
+    for (let i = 0; i + 2 < L.length; i += 3) sats.push({name: L[i].trim(), rec: satellite.twoline2satrec(L[i + 1], L[i + 2])});
+    ptsGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(sats.length * 3), 3));
+    selected = -1; sel.visible = false; drawTrail(); renderList(); msg('');
+  } catch (e) { msg('could not load TLE data (offline or CelesTrak blocked)'); }
+}
+function renderList() {
+  const q = $('q').value.toLowerCase();
+  $('list').innerHTML = '';
+  sats.forEach((s, i) => {
+    if (!s.name.toLowerCase().includes(q)) return;
+    const d = document.createElement('div');
+    d.textContent = s.name; d.className = i === selected ? 'on' : '';
+    d.onclick = () => select(i); $('list').appendChild(d);
+  });
+}
+function select(i) { selected = i; sel.visible = i >= 0; drawTrail(); renderList(); }
+$('group').onchange = e => load(e.target.value);
+$('q').oninput = renderList;
+
+function state(s, date, gmst) {
+  const pv = satellite.propagate(s.rec, date);
+  if (!pv.position) return null;
+  const g = satellite.eciToGeodetic(pv.position, gmst), v = pv.velocity;
+  return {lat: g.latitude, lon: g.longitude, h: g.height, v: Math.hypot(v.x, v.y, v.z)};
+}
+function drawTrail() {
+  if (trailLine) { scene.remove(trailLine); trailLine = null; }
+  if (selected < 0 || !$('trail').checked) return;
+  const p = [];
+  for (let m = 0; m <= 100; m++) {
+    const d = new Date(simMs + m * 60000), st = state(sats[selected], d, satellite.gstime(d));
+    if (st) p.push(new THREE.Vector3(...xyz(st.lat, st.lon, st.h)));
+  }
+  trailLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(p), new THREE.LineBasicMaterial({color: 0x7fb4ff}));
+  scene.add(trailLine);
+}
+$('trail').onchange = drawTrail;
+
+// --- click to select ---
+const ray = new THREE.Raycaster(); ray.params.Points.threshold = 0.03;
+renderer.domElement.addEventListener('click', e => {
+  ray.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+  const hit = ray.intersectObject(pts)[0];
+  if (hit && hit.point.length() > 1.005) select(hit.index);
+});
+
+// --- time controls ---
+document.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
+  speed = +b.dataset.s;
+  document.querySelectorAll('[data-s]').forEach(x => x.classList.toggle('on', x === b));
+});
+$('now').onclick = () => { simMs = Date.now(); drawTrail(); };
+
+// --- loop ---
+function frame(now) {
+  simMs += (now - last) * speed; last = now;
+  const date = new Date(simMs), gmst = satellite.gstime(date), a = ptsGeo.attributes.position;
+  sats.forEach((s, i) => {
+    const st = state(s, date, gmst), p = st ? xyz(st.lat, st.lon, st.h) : [0, 0, 0];
+    a.setXYZ(i, ...p);
+    if (i === selected && st) {
+      sel.position.set(...p);
+      $('info').innerHTML = `<b>${s.name}</b><br>lat ${(st.lat * 180 / Math.PI).toFixed(2)}° · lon ${(st.lon * 180 / Math.PI).toFixed(2)}°<br>altitude ${st.h.toFixed(0)} km<br>speed ${st.v.toFixed(2)} km/s`;
+    }
+  });
+  if (a) a.needsUpdate = true;
+  $('clock').textContent = date.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+  controls.update(); renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// --- optional: simulated satellite from ground.py (only when served at http://localhost:8000) ---
+const cmd = (c, arg) => fetch('/cmd', {method: 'POST', body: JSON.stringify({cmd: c, arg})});
+async function pollSim() {
+  try {
+    const d = await (await fetch('/api')).json(), t = d.history[d.history.length - 1];
+    if (!t) return;
+    $('sim').style.display = 'block';
+    $('simtm').innerHTML = `<span class="${t.mode}">${t.mode}</span> · ${t.eclipse ? 'eclipse' : 'sunlit'}<br>battery <i>${t.battery}%</i> · temp <i>${t.temp}°C</i><br>solar ${t.solar_w} W · load ${t.load_w} W` +
+      (t.faults.length ? `<br><span class="SAFE">${t.faults.join(', ')}</span>` : '');
+    simMark.position.set(...xyz(t.lat * Math.PI / 180, t.lon * Math.PI / 180, 400)); simMark.visible = true;
+  } catch (e) { $('sim').style.display = 'none'; simMark.visible = false; }
+}
+setInterval(pollSim, 1000);
+
+load('stations').then(() => { const i = sats.findIndex(s => s.name.includes('ISS')); if (i >= 0) select(i); });
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
