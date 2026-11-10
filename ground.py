@@ -15,6 +15,7 @@ def link():
             conn[0] = s
             for line in s.makefile():
                 m = json.loads(line)
+                m["rx"] = time.time()
                 (history if m["type"] == "tm" else acks).append(m)
         except OSError:
             pass
@@ -34,7 +35,7 @@ class H(BaseHTTPRequestHandler):
             self.reply({"linked": conn[0] is not None, "history": list(history), "acks": list(acks)})
         else:
             name = self.path.lstrip("/")
-            name = name if name in ("dashboard.html", "index.html") else "app.html"
+            name = name if name in ("app.html", "index.html") else "dashboard.html"
             self.reply((Path(__file__).parent / name).read_bytes(), "text/html")
 
     def do_POST(self):

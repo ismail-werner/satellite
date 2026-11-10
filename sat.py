@@ -22,6 +22,7 @@ class Sat:
         self.temp = 20.0
         self.mode = "NOMINAL"
         self.payload = True
+        self.hold_safe = False
         self.faults = []
         self.log = []
 
@@ -64,7 +65,7 @@ class Sat:
         if self.temp > MAX_TEMP and self.mode != "SAFE":
             self.faults.append("OVERTEMP")
             self.set_mode("SAFE")
-        if self.mode == "SAFE" and self.batt > RECOVER_ABOVE and not self.faults:
+        if self.mode == "SAFE" and self.batt > RECOVER_ABOVE and not self.faults and not self.hold_safe:
             self.set_mode("NOMINAL")
         self.sun, self.load = sun, load
 
@@ -74,6 +75,7 @@ class Sat:
         if cmd == "SET_MODE" and arg in ("NOMINAL", "SAFE"):
             if arg == "NOMINAL" and self.batt < SAFE_BELOW:
                 return "REJECTED: battery too low"
+            self.hold_safe = arg == "SAFE"   # a commanded SAFE stays until ground says otherwise
             self.set_mode(arg)
             return f"MODE={arg}"
         if cmd == "PAYLOAD" and arg in ("ON", "OFF"):
@@ -93,7 +95,11 @@ class Sat:
                 "temp": round(self.temp, 2), "solar_w": getattr(self, "sun", SOLAR_W),
                 "load_w": getattr(self, "load", BUS_W + PAYLOAD_W), "eclipse": self.eclipse(),
                 "payload": self.payload, "lat": round(lat, 2), "lon": round(lon, 2),
-                "faults": self.faults, "log": self.log[-8:]}
+                "faults": self.faults, "log": self.log[-8:],
+                "orbit": int(self.t // ORBIT_S) + 1, "phase": round(self.phase(), 4),
+                "period_s": ORBIT_S, "eclipse_start": 1 - ECLIPSE_FRAC,
+                "next_change_s": round(((1 if self.eclipse() else 1 - ECLIPSE_FRAC) - self.phase()) * ORBIT_S),
+                "limits": {"safe_below": SAFE_BELOW, "recover_above": RECOVER_ABOVE, "max_temp": MAX_TEMP}}
 
 
 def main(host="127.0.0.1", port=9000, tick=1.0):

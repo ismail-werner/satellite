@@ -19,8 +19,8 @@ Then open http://localhost:8000.
 |------|--------------|
 | `sat.py` | Simulated satellite and flight software: orbit, eclipse cycles, battery, solar power, temperature. It switches to SAFE mode on low battery or overtemperature and recovers by itself. Commands: `PING`, `SET_MODE`, `PAYLOAD`, `CLEAR_FAULTS`. One real second is one simulated minute. |
 | `ground.py` | Ground station. Talks to `sat.py` over TCP (newline-delimited JSON) and serves the web pages and a small JSON API. |
-| `app.html` | 3D globe tracking real satellites from CelesTrak orbit data (stations, GPS, weather, science), with orbit paths, time acceleration and a panel for the simulated satellite. Works on its own if opened directly, but the simulated-satellite panel needs `ground.py`. |
-| `dashboard.html` | Telemetry charts, ground track, command buttons and event log for the simulated satellite (`/dashboard.html`). |
+| `dashboard.html` | Mission control, the home page at `/`: live battery, temperature, power and orbit tiles, linked telemetry charts with eclipse shading and hover readout, a table view, a ground-track map, commands with history, safe-mode alerts, and light/dark themes. |
+| `app.html` | 3D globe at `/app.html` tracking real satellites from CelesTrak orbit data (stations, GPS, weather, science), with orbit paths, time acceleration and a panel for the simulated satellite. Works on its own if opened directly, but the simulated-satellite panel needs `ground.py`. |
 | `index.html` | Separate NASA dashboard: live ISS position, Astronomy Picture of the Day and today's near-Earth asteroids. Uses NASA's `DEMO_KEY`, which is rate limited; get a free key at api.nasa.gov. |
 | `test_sat.py` | Checks safe-mode entry and recovery: `python test_sat.py` |
 
